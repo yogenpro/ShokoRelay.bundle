@@ -1,9 +1,12 @@
 > [!IMPORTANT]
 > **Experimental fork:** this checkout extends the legacy scanner's root-scan
-> grouping workaround to flat top-level folders. It is not a validated Plex
-> deployment or a backport of the modern Shoko plugin. See the
-> [experiment scope and acceptance plan](Contents/Scanners/Series/EXPERIMENT.md).
-> Run the credential-free developer checks with `python3 tests/test_scanner.py`.
+> grouping workaround to flat top-level folders. A native synthetic comparison
+> reproduced the baseline bug and preserved the candidate's split through full
+> and targeted/new-file scans. This is not production or Shoko metadata-agent
+> acceptance, nor a backport of the modern plugin. See the
+> [results and remaining acceptance plan](Contents/Scanners/Series/EXPERIMENT.md).
+> Run `python3 tests/test_scanner.py` and `python3 tests/test_fixture_api.py`
+> for credential-free developer checks.
 > Upstream installation instructions below do not constitute approval to deploy
 > this experiment or alter an existing library.
 

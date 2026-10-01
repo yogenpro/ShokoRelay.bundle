@@ -18,7 +18,12 @@ files, including that flat case. It changes only the root-scan orchestration;
 no directories are added, renamed or deleted, and original media paths are
 passed to Plex unchanged.
 
-The change does **not** alter:
+Configuration and log filenames now follow the scanner's own basename. The
+original `Shoko Relay Scanner.py` still uses its original `.cfg` and `.log`
+names, while separately named experimental scanners cannot accidentally read
+production credentials or share its log. This supports side-by-side testing.
+
+The grouping change does **not** alter:
 
 - Shoko file lookup through immediate-parent name + filename (`PathEndsWith`).
 - Selection of the first SeriesID for a video linked to multiple series.
@@ -36,6 +41,7 @@ From a source checkout, run:
 
 ```sh
 python3 tests/test_scanner.py
+python3 tests/test_fixture_api.py
 ```
 
 Python 3.7+ and its standard library are sufficient for the tests. The shipped
@@ -55,12 +61,38 @@ These checks prove scanner emissions and queue handling only. The fixture
 files contain synthetic bytes, not playable video. SDK filtering/stacking and
 Plex's native grouping engine are **not** reproduced by the mocks.
 
-## Native Plex acceptance still required
+## Native Plex results — synthetic scanner-only test
 
-No successful Plex grouping result or deployment is claimed yet. Before any
-production adoption, use a fresh, separately authorized synthetic test library
-and actual small playable fixtures with a fixture-only Shoko API adapter.
-Do not import synthetic content into a production Shoko catalogue.
+A controlled native Plex comparison used two distinct, playable synthetic
+videos in one flat folder, a loopback-only Shoko 5-style fixture API, separate
+scanner names/configurations, and the **Personal Media Shows** agent. No live
+catalogue or source media was used.
+
+| Scenario | Result |
+| --- | --- |
+| Baseline with upstream grouping guard | One show/episode containing both files as media versions: failure reproduced. |
+| Candidate full scan | Two distinct shows/episodes, each pointing only to its intended file. |
+| Repeated full scan | Same show/episode identities; no duplicates. |
+| Targeted scan of unchanged folder | Split and identities preserved. |
+| Start with series A, append series B, targeted scan | A retained its identity; B became a distinct new show/episode. Native logs confirmed a non-root callback. |
+| Metadata refresh using Personal Media Shows | Split and identities preserved. |
+
+This is evidence for the **scanner grouping fix**, not a production deployment
+or end-to-end ShokoRelay metadata-agent acceptance. Automatic filesystem-event
+rescans were not exercised. Duplicate-title matching, ambiguous suffixes,
+multiple-series videos, the real Shoko metadata agent, and native nested-layout
+controls remain follow-up work.
+
+The generic manual adapter is `tests/fixture_api.py`. It binds only loopback,
+uses a synthetic identity and fixed fixture mappings, and never reads a media
+inventory or contacts Shoko. It covers scanner endpoints only, **not** the
+metadata agent. Do not point production clients at it.
+
+## Remaining native acceptance
+
+Before production adoption, continue with fresh, separately authorized synthetic
+test libraries and actual small playable fixtures. Do not import synthetic
+content into a production Shoko catalogue.
 
 Verify at least:
 

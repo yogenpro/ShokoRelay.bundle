@@ -1,9 +1,11 @@
 import os, sys, json, urllib, inspect, urllib2, logging, logging.handlers
 import Media, Stack, VideoFiles, ConfigParser
 
+# Use a matching configuration/log basename so renamed test scanners are isolated.
+SCANNER_NAME = os.path.splitext(os.path.basename(inspect.getfile(inspect.currentframe())))[0]
 # Load Shoko's credentials and the SingleSeasonOrdering preference from the external configuration file
 cfg = ConfigParser.RawConfigParser()
-cfg.read(os.path.abspath(os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), '.', 'Shoko Relay Scanner.cfg')))
+cfg.read(os.path.abspath(os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), '.', SCANNER_NAME + '.cfg')))
 
 API_KEY = '' # Leave this blank
 
@@ -25,7 +27,7 @@ if not os.path.isdir(LOG_ROOT):
 # Define logger parameters with a max size of 12MiB and five backups for file rotation
 def set_logging(foldername='', filename='', format=''):
     foldername = os.path.join(LOG_ROOT, '')
-    filename   = 'Shoko Relay Scanner.log'
+    filename   = SCANNER_NAME + '.log'
     format     = '%(asctime)s : %(levelname)s - %(message)s'
     handler = logging.handlers.RotatingFileHandler(os.path.join(foldername, filename), maxBytes=12 * 1024 * 1024, backupCount=5)
     handler.setFormatter(logging.Formatter(format))

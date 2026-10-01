@@ -37,6 +37,10 @@ def forbidden_io(*args, **kwargs):
 class Logger:
     def __init__(self):
         self.errors = []
+        self.handlers = []
+
+    def addHandler(self, handler):
+        self.handlers.append(handler)
 
     def error(self, message):
         self.errors.append(message)
@@ -46,12 +50,11 @@ class Logger:
 
     debug = info
     setLevel = info
-    addHandler = info
 
 
 class Handler:
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, path, *args, **kwargs):
+        self.path = path
 
     def setFormatter(self, *args):
         pass
@@ -60,7 +63,11 @@ class Handler:
 
 
 class Config:
-    def read(self, *args):
+    def __init__(self):
+        self.paths = []
+
+    def read(self, path):
+        self.paths.append(path)
         return []  # Do not open a real .cfg file, even if one exists locally.
 
     get = staticmethod(forbidden_io)
@@ -80,7 +87,7 @@ class Episode:
         self.display_offset = 0
 
 
-def load_scanner():
+def load_scanner(source=SCANNER):
     """Load unchanged scanner syntax with a Python 3 shim for its Python 2 SDK."""
     log, stack_calls = Logger(), []
     modules = {name: types.ModuleType(name) for name in (
@@ -108,19 +115,29 @@ def load_scanner():
     absent = object()
     previous = {name: sys.modules.get(name, absent) for name in modules}
     scanner = types.ModuleType("scanner_under_test")
-    scanner.__file__ = str(SCANNER)
+    scanner.__file__ = str(source)
     scanner.Platform = types.SimpleNamespace(OS="Linux")
     try:
         sys.modules.update(modules)
         # exec/compile avoids generating __pycache__ in the shipped bundle.
-        exec(compile(SCANNER.read_text(encoding="utf-8"), str(SCANNER), "exec"), scanner.__dict__)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), scanner.__dict__)
     finally:
         for name, module in previous.items():
             if module is absent:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+    check(scanner.cfg.paths == [str(source.with_suffix(".cfg"))], "configuration basename differs")
+    check(Path(log.handlers[0].path).name == source.stem + ".log", "log basename differs")
     return scanner, log, stack_calls
+
+
+def run_alias():
+    with TemporaryDirectory(prefix="relay-alias-test-") as temp:
+        alias = Path(temp) / "Relay Isolated Experiment.py"
+        alias.write_text(SCANNER.read_text(encoding="utf-8"), encoding="utf-8")
+        load_scanner(alias)
+        check(not alias.with_suffix(".cfg").exists(), "real alias configuration was created")
 
 
 @dataclass
@@ -289,17 +306,19 @@ CASES = [
 
 def main():
     failures = []
-    for case in CASES:
+    scenarios = [(case.name, lambda case=case: run_case(case)) for case in CASES]
+    scenarios.append(("renamed scanner keeps configuration and logs isolated", run_alias))
+    for name, run in scenarios:
         try:
-            run_case(case)
+            run()
         except Exception as exc:
-            failures.append((case.name, str(exc)))
+            failures.append((name, str(exc)))
     if failures:
         for name, message in failures:
             print("FAIL " + name + ": " + message)
-        print(str(len(failures)) + " of " + str(len(CASES)) + " scenarios failed")
+        print(str(len(failures)) + " of " + str(len(scenarios)) + " scenarios failed")
         return 1
-    print("ok " + str(CHECKS) + " checks passed across " + str(len(CASES)) + " scanner scenarios")
+    print("ok " + str(CHECKS) + " checks passed across " + str(len(scenarios)) + " scanner scenarios")
     return 0
 
 
