@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+> **Experimental fork:** this checkout extends the legacy scanner's root-scan
+> grouping workaround to flat top-level folders. It is not a validated Plex
+> deployment or a backport of the modern Shoko plugin. See the
+> [experiment scope and acceptance plan](Contents/Scanners/Series/EXPERIMENT.md).
+> Run the credential-free developer checks with `python3 tests/test_scanner.py`.
+> Upstream installation instructions below do not constitute approval to deploy
+> this experiment or alter an existing library.
+
 ![Shoko Relay Logo](https://github.com/natyusha/ShokoRelay.bundle/assets/985941/23bfd7c2-eb89-46d5-a7cb-558c374393d6 "Shoko Relay")  
 [![Discord](https://img.shields.io/discord/96234011612958720?logo=discord&logoColor=fff&label=Discord&color=5865F2 "Shoko Discord")](https://discord.com/channels/96234011612958720/268484849419943936)
 [![Shoko Docs](https://img.shields.io/badge/VitePress-Shoko_Docs-4E7CF5?logo=vitepress&logoColor=fff)](https://docs.shokoanime.com/plex/configuring-shoko-relay)
