@@ -1,0 +1,90 @@
+name: Upstream synchronization
+
+on:
+  schedule:
+    - cron: '37 10 * * *'
+  workflow_dispatch:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'yogenpro/ShokoRelay.bundle'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    outputs:
+      pr: ${{ steps.prepare.outputs.pr }}
+      head: ${{ steps.prepare.outputs.head }}
+      base: ${{ steps.prepare.outputs.base }}
+      ready: ${{ steps.prepare.outputs.ready }}
+      reason: ${{ steps.prepare.outputs.reason }}
+    steps:
+      # pull_request_target is intentional: only trusted master code runs here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          persist-credentials: false
+      - id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B -S scripts/upstream-sync.py prepare
+
+  regression:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.head }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Verify automation and regression policy
+        run: python3 -B -S trusted/tests/test_upstream_sync.py
+      - name: Test candidate with trusted regression suites and Python 2.7 grammar
+        run: python3 -B -S trusted/scripts/check-relay.py candidate
+
+  finalize:
+    needs: [prepare, regression]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.pr != ''
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+      - name: Publish exact-revision result and enable native auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr }}
+          TESTED_HEAD: ${{ needs.prepare.outputs.head }}
+          TESTED_BASE: ${{ needs.prepare.outputs.base }}
+          CHECK_RESULT: ${{ needs.regression.result }}
+          PREPARE_REASON: ${{ needs.prepare.outputs.reason }}
+        run: python3 -B -S scripts/upstream-sync.py finish

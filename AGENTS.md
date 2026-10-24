@@ -27,3 +27,21 @@ Read `Contents/Scanners/Series/EXPERIMENT.md` before changing scan behavior.
 - Any PR must explicitly target this fork unless the owner requests an upstream
   contribution. Inherited upstream release workflows are not a test/deployment
   plan; do not publish tags/releases or enable write-capable automation casually.
+
+## Maintaining upstream imports
+
+The owner authorized daily upstream-update PRs in this fork and automatic
+merge after required trusted regression checks pass. `master` is the maintained
+patched branch. Read `UPSTREAM.md` before repairing a blocked update.
+
+- Preserve the original upstream commit and fork fixes; merge current master
+  into the existing PR branch. Never replace the branch or force-push repairs.
+- Run `python3 -B -S scripts/check-relay.py . --python2 python2.7` and
+  `python3 -B -S tests/test_upstream_sync.py`. Without Python 2.7 locally, use
+  the runner's default pinned Docker grammar check.
+- Do not weaken tests, alter required checks or change automation to make an
+  upstream import pass. Changes to tests, scripts, workflows or these
+  instructions require manual review and cannot merge automatically.
+- An AI repair is source-only. Do not contact live services, read credentials,
+  deploy, scan a library or modify media. The updater invokes no AI itself;
+  an owner starts Codex from a PR comment when an exception needs repair.

@@ -10,6 +10,12 @@
 > Upstream installation instructions below do not constitute approval to deploy
 > this experiment or alter an existing library.
 
+This fork also includes opt-in SeriesID matching, Windows long-path handling,
+identity-scoped stacking and a strict negative-season airdate guard. See
+[IDENTITY.md](Contents/Scanners/Series/IDENTITY.md) for behavior and limitations,
+and [UPSTREAM.md](UPSTREAM.md) for daily upstream-update PRs, automatic merging
+after regression checks, and Codex repair instructions for blocked updates.
+
 ![Shoko Relay Logo](https://github.com/natyusha/ShokoRelay.bundle/assets/985941/23bfd7c2-eb89-46d5-a7cb-558c374393d6 "Shoko Relay")  
 [![Discord](https://img.shields.io/discord/96234011612958720?logo=discord&logoColor=fff&label=Discord&color=5865F2 "Shoko Discord")](https://discord.com/channels/96234011612958720/268484849419943936)
 [![Shoko Docs](https://img.shields.io/badge/VitePress-Shoko_Docs-4E7CF5?logo=vitepress&logoColor=fff)](https://docs.shokoanime.com/plex/configuring-shoko-relay)
