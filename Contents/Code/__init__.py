@@ -40,10 +40,44 @@ def HttpReq(url, retry=True):
         API_KEY = ''
         return HttpReq(url, False)
 
+def parse_series_identity(name):
+    """An explicit scanner identity is canonical, bounded and never a title guess."""
+    if '[ShokoRelay SeriesID' not in name:
+        return None
+    match = re.match(r'(.+) \[ShokoRelay SeriesID:([1-9][0-9]{0,9})\]\Z', name)
+    if not match or name.count('[ShokoRelay SeriesID') != 1 or '\r' in name or '\n' in name:
+        raise ValueError('Malformed Shoko SeriesID identity')
+    series_id = int(match.group(2))
+    if series_id > 2147483647:
+        raise ValueError('Out-of-range Shoko SeriesID identity')
+    return series_id
+
+
 class ShokoRelayAgent:
     def Search(self, results, media, lang, manual):
-        # Search for the series using the name from the scanner
         name = media.show
+        if not isinstance(name, basestring):
+            Log('Refusing non-text scanner identity')
+            return
+        try:
+            series_id = parse_series_identity(name)
+        except ValueError:
+            Log('Refusing malformed scanner SeriesID identity; no title fallback')
+            return
+        if series_id is not None:
+            data = HttpReq('api/v3/Series/%s?includeDataFrom=AniDB,TMDB' % series_id)
+            title = try_get(data, 'Name', None)
+            if str(try_get(try_get(data, 'IDs', {}), 'ID', None)) != str(series_id) or not isinstance(title, basestring) or not title:
+                Log('Refusing mismatched or incomplete SeriesID response; no title fallback')
+                return
+            airdate = try_get(try_get(data, 'AniDB', {}), 'AirDate', None)
+            year = airdate.split('-')[0] if airdate else None
+            results.Append(MetadataSearchResult(str(series_id), data['Name'], year, 100, lang))
+            return
+        if Prefs['RequireSeriesIDToken']:
+            Log('Refusing untagged scanner title in SeriesID-only mode')
+            return
+        # Untagged titles retain legacy behavior only when strict mode is off.
         prelimresults = HttpReq('api/v3/Series/Search?query=%s&fuzzy=false&limit=10' % (urllib.quote_plus(name.encode('utf8')))) # http://127.0.0.1:8111/api/v3/Series/Search?query=Kowarekake%20no%20Orgel&fuzzy=false&limit=10
         for idx, series_data in enumerate(prelimresults):
             series_id = series_data['IDs']['ID']                                                              # Get series series id from series data
@@ -302,9 +336,8 @@ class ShokoRelayAgent:
                 # Get Originally Available
                 airdate_log = ep_object.originally_available_at = datetime.datetime.strptime(ep_data['AniDB']['AirDate'], '%Y-%m-%d').date() if try_get(ep_data['AniDB'], 'AirDate', None) else None
                 # Remove the air dates for negative seasons according to the preference
-                if season == -4 and Prefs['disableNegativeSeasonAirdates'] == 'Exclude Other': pass
-                elif season < 0 and Prefs['disableNegativeSeasonAirdates'] != 'Disabled':
-                    airdate_log, ep_object.originally_available_at = 'Disabled in Agent Settings - Skipping!', None
+                if suppress_negative_airdate(season, Prefs['disableNegativeSeasonAirdates'], Prefs['RequireSeriesIDToken']):
+                    airdate_log, ep_object.originally_available_at = ('Strict identity preserves signed episode coordinates - Skipping Airdate!' if Prefs['RequireSeriesIDToken'] else 'Disabled in Agent Settings - Skipping!'), None
                 Log('Originally Available:          %s' % airdate_log)
 
                 # Get Content Ratings (from series)
@@ -398,6 +431,15 @@ def summary_sanitizer(summary):
         summary = re.sub(r'\s{2,}', ' ', summary).strip(' \n') # Remove double spaces and strip spaces and newlines
     if not summary: summary = None # For logging purposes
     return summary
+
+def suppress_negative_airdate(season, preference, strict_identity):
+    # Plex's legacy metadata importer can rematch negative-season episodes by
+    # date and merge distinct signed coordinates sharing a release date. In
+    # strict ID mode, retain coordinates, not that ambiguous date hint.
+    if season >= 0: return False
+    if strict_identity: return True
+    return preference != 'Disabled' and not (season == -4 and preference == 'Exclude Other')
+
 
 def title_case(text):
     # Words to force lowercase in tags to follow AniDB capitalisation rules: https://wiki.anidb.net/Capitalisation (some romaji tag endings and separator words are also included)

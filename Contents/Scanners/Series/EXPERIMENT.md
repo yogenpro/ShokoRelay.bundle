@@ -88,6 +88,23 @@ uses a synthetic identity and fixed fixture mappings, and never reads a media
 inventory or contacts Shoko. It covers scanner endpoints only, **not** the
 metadata agent. Do not point production clients at it.
 
+## Opt-in SeriesID identity follow-up
+
+A separate [SeriesID identity experiment](IDENTITY.md) now addresses identical
+scanner titles. It adds an explicit ID token only when `SeriesIDIdentity=True`,
+and resolves that token directly in the metadata agent. Legacy defaults stay
+unchanged; this is not a deployment or native acceptance claim.
+
+Run `python3 tests/test_agent_identity.py`, `tests/test_windows_paths.py`,
+`tests/test_stack_identity.py` and `tests/test_negative_airdates.py` in addition
+to the two scanner/API suites. Real credentials/network remain blocked.
+Suffix lookup, primary-series selection and episode ordering remain unchanged.
+Identity mode now confines SDK stacking to one signed coordinate/offset, and
+strict agent mode suppresses negative-season date hints that can trigger native
+consolidation. See `IDENTITY.md` for those exceptions, Windows path contracts,
+legacy-default behavior and existing-index limitations. This is not permission
+to deploy, rebuild or clean up a live library.
+
 ## Remaining native acceptance
 
 Before production adoption, continue with fresh, separately authorized synthetic

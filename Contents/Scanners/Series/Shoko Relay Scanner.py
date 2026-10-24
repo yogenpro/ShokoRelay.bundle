@@ -1,4 +1,4 @@
-import os, sys, json, urllib, inspect, urllib2, logging, logging.handlers
+import os, sys, json, urllib, inspect, urllib2, logging, logging.handlers, re
 import Media, Stack, VideoFiles, ConfigParser
 
 # Use a matching configuration/log basename so renamed test scanners are isolated.
@@ -66,17 +66,86 @@ def HttpReq(url, retry=True):
         API_KEY = ''
         return HttpReq(url, False)
 
+def ordinary_path(path):
+    """Strip Windows' extended prefix only for path arithmetic/comparisons."""
+    if os.name != 'nt': return path
+    if isinstance(path, bytes): path = path.decode('utf-8')
+    if path.startswith(u'\\\\?\\UNC\\'): return u'\\\\' + path[8:]
+    if path.startswith(u'\\\\?\\'): return path[4:]
+    return path
+
+
+def filesystem_path(path):
+    """Use wide Windows APIs past MAX_PATH; never change a Media.parts path."""
+    if os.name != 'nt': return path
+    path = os.path.abspath(ordinary_path(path))
+    if path.startswith(u'\\\\'): return u'\\\\?\\UNC\\' + path[2:]
+    return u'\\\\?\\' + path
+
+
+def relative_path(path, root):
+    return os.path.relpath(ordinary_path(path), ordinary_path(root))
+
+
+def canonical_path(path):
+    return os.path.normcase(os.path.normpath(ordinary_path(path)))
+
+
+def sdk_path(path):
+    # Filter.py expects UTF-8 byte strings on legacy Windows (calls .decode).
+    if os.name == 'nt' and sys.version_info[0] < 3 and isinstance(path, type(u'')):
+        return path.encode('utf-8')
+    return path
+
+
+def scan_video_files(path, files, mediaList, subdirs, root):
+    if os.name != 'nt':
+        return VideoFiles.Scan(path, files, mediaList, subdirs, root)
+    # SDK Filter performs its own stat/open calls. Use long-path names only
+    # during those reads, then restore the supplied paths before emissions.
+    originals = dict((canonical_path(f), sdk_path(f)) for f in files)
+    io_files = [sdk_path(filesystem_path(f)) for f in files]
+    before = len(mediaList)
+    VideoFiles.Scan(sdk_path(path), io_files, mediaList, subdirs, sdk_path(root))
+    files[:] = [originals[canonical_path(f)] for f in io_files]
+    for item in mediaList[before:]:
+        item.parts[:] = [originals.get(canonical_path(f), sdk_path(ordinary_path(f))) for f in item.parts]
+
+
+def stack_media(path, files, mediaList, subdirs):
+    if not (cfg.has_option('Prefs', 'SeriesIDIdentity') and cfg.getboolean('Prefs', 'SeriesIDIdentity')):
+        return Stack.Scan(path, files, mediaList, subdirs)
+    # The generic SDK stacker compares filenames, not episode identity. A
+    # "part1"/"part2" name is not permission to discard distinct Shoko episodes.
+    # Preserve its multipart handling, but only within one signed coordinate
+    # and display offset of one tokenized series.
+    groups, order = {}, []
+    for item in mediaList:
+        key = (getattr(item, 'show', None), getattr(item, 'season', None),
+               getattr(item, 'episode', None), getattr(item, 'display_offset', 0))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(item)
+    result = []
+    for key in order:
+        items = groups[key]
+        Stack.Scan(path, files, items, subdirs)
+        result.extend(items)
+    mediaList[:] = result
+
+
 def Scan(path, files, mediaList, subdirs, language=None, root=None):
     if path  : Log.debug('[Path]                    %s' % path)
     if files : Log.debug('[Files]                   %s' % ', '.join(files))
 
-    for subdir in subdirs: Log.debug('[Folder]                  %s' % os.path.relpath(subdir, root))
+    for subdir in subdirs: Log.debug('[Folder]                  %s' % relative_path(subdir, root))
     ordering = ' Single Season' if cfg.getboolean('Prefs', 'SingleSeasonOrdering') else ' Multi Seasons'
     Log.info('===========================[Shoko Relay Scanner v1.2.36%s]%s' % (ordering, '=' * 230))
 
     if files:
         # Scan for video files
-        VideoFiles.Scan(path, files, mediaList, subdirs, root)
+        scan_video_files(path, files, mediaList, subdirs, root)
         prev_series_id = None
 
         for idx, file in enumerate(files):
@@ -85,7 +154,7 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None):
 
                 # Get file data using the filename
                 filename  = os.path.join(os.path.split(os.path.dirname(file))[-1], os.path.basename(file))  # Parent folder + file name
-                file_data = HttpReq('api/v3/File/PathEndsWith/%s?include=XRefs' % (urllib.quote(filename))) # http://127.0.0.1:8111/api/v3/File/PathEndsWith/Kowarekake%20no%20Orgel%5CKowarekake%20no%20Orgel%20-%2001.mkv?include=XRefs
+                file_data = HttpReq('api/v3/File/PathEndsWith/%s?include=XRefs' % (urllib.quote(filename.encode('utf-8') if isinstance(filename, type(u'')) else filename))) # http://127.0.0.1:8111/api/v3/File/PathEndsWith/Kowarekake%20no%20Orgel%5CKowarekake%20no%20Orgel%20-%2001.mkv?include=XRefs
 
                 # Take the first file from the search - Searching with both parent folder and filename should only return a single result
                 if len(file_data) == 1:
@@ -114,6 +183,13 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None):
 
                 # Get the preferred/overridden title (preferred title follows Shoko's language settings)
                 title = series_data['Name'].encode('utf-8') # Requires utf-8
+                if cfg.has_option('Prefs', 'SeriesIDIdentity') and cfg.getboolean('Prefs', 'SeriesIDIdentity'):
+                    identity = str(series_id)
+                    if not re.match(r'[1-9][0-9]{0,9}\Z', identity) or int(identity) > 2147483647:
+                        raise ValueError('Non-canonical Shoko SeriesID')
+                    if not series_data['Name'] or '[ShokoRelay SeriesID' in series_data['Name'] or '\n' in series_data['Name'] or '\r' in series_data['Name']:
+                        raise ValueError('Reserved identity marker or newline in series title')
+                    title += (' [ShokoRelay SeriesID:%s]' % identity).encode('ascii')
                 Log.info(' Title [ShokoID]:          %s [%s]' % (title, series_id))
 
                 # Determine the TMDB type
@@ -176,22 +252,23 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None):
                 Log.error('Error in Scan:            (%s)' % e)
                 continue
 
-        Stack.Scan(path, files, mediaList, subdirs)
+        stack_media(path, files, mediaList, subdirs)
 
     if not path: # If current folder is root folder
         Log.info(' Initiating Global Subfolder Scan & Plex Grouping Removal') # Log once during the root scan
+        Log.info(' Root:                     %s' % root)
         Log.info('=' * 300)
         subfolders = subdirs[:]
 
         while subfolders: # Subfolder scanning queue
-            full_path = subfolders.pop(0)
-            path = os.path.relpath(full_path, root)
+            full_path = ordinary_path(subfolders.pop(0))
+            path = relative_path(full_path, root)
             Log.info(' Subfolder Scan:           %s' % full_path)
 
             subdir_dirs, subdir_files = [], []
-            for file in os.listdir(full_path):
+            for file in os.listdir(filesystem_path(full_path)):
                 path_item = os.path.join(full_path, file)
-                if os.path.isdir(path_item): subdir_dirs.append(path_item)
+                if os.path.isdir(filesystem_path(path_item)): subdir_dirs.append(path_item)
                 else: subdir_files.append(path_item)
 
             if subdir_dirs: Log.info(' Subdirectories:           %s' % ', '.join(subdir_dirs))
@@ -200,15 +277,24 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None):
                 subfolders.append(dir)
                 Log.info(' Added to Scan:            %s' % dir) # Add the subfolder to subfolder scanning queue
 
-            grouping_dir = full_path.rsplit(os.sep, full_path.count(os.sep) - 1 - root.count(os.sep))[0]
+            # Native roots/queued directories may have trailing separators.
+            # Compare canonical paths, leaving emitted source paths untouched.
+            normalized_root = os.path.normpath(ordinary_path(root))
+            top_level = relative_path(os.path.normpath(full_path), normalized_root).split(os.sep)[0]
+            grouping_dir = canonical_path(os.path.join(normalized_root, top_level))
             # Collect flat top-level folders here too, before Plex gets a
             # separate folder callback that can group different series together.
             if subdir_files:
                 Log.info(' Files Detected:           Subfolder Scan & Plex Grouping Removal Initiated in Current Folder')
-                if grouping_dir in subdirs: subdirs.remove(grouping_dir) # Prevent group folders from being called by Plex normal call to Scan()
+                subdirs[:] = [queued for queued in subdirs
+                              if canonical_path(queued) != grouping_dir] # Remove consumed native callbacks
                 Log.info('-' * 300)
                 # Relative path for dir or it will group multiple series into one as before and no empty subdirs array because they will be scanned afterwards
                 Scan(path, sorted(subdir_files), mediaList, [], language, root)
+
+        Log.info(' Root Return:              Media=%s Parts=%s Shows=%s Queue=%r' %
+                 (len(mediaList), sum(len(item.parts) for item in mediaList if hasattr(item, 'parts')),
+                  len(set(item.show for item in mediaList if hasattr(item, 'show'))), subdirs))
 
 def try_get(arr, idx, default=''):
     try:              return arr[idx]

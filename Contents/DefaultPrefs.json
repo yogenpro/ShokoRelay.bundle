@@ -37,6 +37,13 @@
     },
 
     {
+        "id": "RequireSeriesIDToken",
+        "label": "Require explicit Shoko SeriesID scanner identities; enable only with SeriesIDIdentity=True in the matching scanner configuration.",
+        "type": "bool",
+        "default": false
+    },
+
+    {
         "id": "SeriesTitleLanguage",
         "label": "The preferred languages for the series title, separated by a comma. Set to \"SHOKO\" to use Shoko's preferred title.",
         "type": "text",

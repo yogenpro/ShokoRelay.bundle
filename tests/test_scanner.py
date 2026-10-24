@@ -65,6 +65,7 @@ class Handler:
 class Config:
     def __init__(self):
         self.paths = []
+        self.identity = None
 
     def read(self, path):
         self.paths.append(path)
@@ -72,10 +73,17 @@ class Config:
 
     get = staticmethod(forbidden_io)
 
+    def has_option(self, section, key):
+        if (section, key) != ("Prefs", "SeriesIDIdentity"):
+            raise AssertionError("unexpected optional configuration lookup")
+        return self.identity is not None
+
     def getboolean(self, section, key):
-        if (section, key) != ("Prefs", "SingleSeasonOrdering"):
-            raise AssertionError("unexpected configuration lookup")
-        return True
+        if (section, key) == ("Prefs", "SingleSeasonOrdering"):
+            return True
+        if (section, key) == ("Prefs", "SeriesIDIdentity") and self.identity is not None:
+            return self.identity
+        raise AssertionError("unexpected configuration lookup")
 
 
 class Episode:
@@ -87,7 +95,7 @@ class Episode:
         self.display_offset = 0
 
 
-def load_scanner(source=SCANNER):
+def load_scanner(source=SCANNER, identity=None):
     """Load unchanged scanner syntax with a Python 3 shim for its Python 2 SDK."""
     log, stack_calls = Logger(), []
     modules = {name: types.ModuleType(name) for name in (
@@ -127,6 +135,7 @@ def load_scanner(source=SCANNER):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+    scanner.cfg.identity = identity
     check(scanner.cfg.paths == [str(source.with_suffix(".cfg"))], "configuration basename differs")
     check(Path(log.handlers[0].path).name == source.stem + ".log", "log basename differs")
     return scanner, log, stack_calls
@@ -154,6 +163,10 @@ class Case:
     partial: bool = False
     existing: bool = False
     episode_types: dict = field(default_factory=dict)
+    identity: object = None
+    series_names: dict = field(default_factory=dict)
+    trailing_root: bool = False
+    trailing_queue: bool = False
 
 
 def result(show, episode, path, season=1, offset=0):
@@ -171,7 +184,7 @@ def snapshot(root):
 
 
 def run_case(case):
-    scanner, log, stack_calls = load_scanner()
+    scanner, log, stack_calls = load_scanner(identity=case.identity)
     with TemporaryDirectory(prefix="relay-scanner-test-") as temp:
         root = Path(temp) / "library"
         root.mkdir()
@@ -202,7 +215,8 @@ def run_case(case):
                 return found * 2 if case.ambiguous else found
             if endpoint.startswith("api/v3/Series/"):
                 sid = int(endpoint.rsplit("/", 1)[1])
-                return {"Name": "Series " + chr(64 + sid),
+                title = case.series_names[sid] if sid in case.series_names else "Series " + chr(64 + sid)
+                return {"Name": title,
                         "TMDB": {"Shows": [], "Movies": []}}
             if endpoint.startswith("api/v3/Episode/"):
                 eid = int(endpoint.rsplit("/", 1)[1])
@@ -214,7 +228,8 @@ def run_case(case):
             raise AssertionError("unexpected fixture API endpoint: " + url)
 
         scanner.HttpReq = http
-        subdirs = sorted(str(path) for path in root.iterdir() if path.is_dir())
+        subdirs = sorted(str(path) + (os.sep if case.trailing_queue else '') for path in root.iterdir() if path.is_dir())
+        root_argument = str(root) + (os.sep if case.trailing_root else '')
         media = []
         sentinel = Episode(b"Existing", 1, 1) if case.existing else None
         if sentinel:
@@ -222,9 +237,9 @@ def run_case(case):
         if case.partial:
             folder = root / "Release"
             scanner.Scan("Release", sorted(str(p) for p in folder.iterdir()),
-                         media, [], root=str(root))
+                         media, [], root=root_argument)
         else:
-            scanner.Scan("", [], media, subdirs, root=str(root))
+            scanner.Scan("", [], media, subdirs, root=root_argument)
         if sentinel:
             check(media[0] is sentinel, "pre-existing media record was replaced")
             media = media[1:]
@@ -301,6 +316,60 @@ CASES = [
     Case("existing root media records are preserved",
          {"Release/a.mkv": [(1, [101])]},
          (result("Series A", 1, "Release/a.mkv"),), existing=True),
+    Case("identity mode separates identical titles in one flat folder",
+         {"Release/a.mkv": [(1, [101])], "Release/b.mkv": [(2, [201])]},
+         (result("Shared title [ShokoRelay SeriesID:1]", 1, "Release/a.mkv"),
+          result("Shared title [ShokoRelay SeriesID:2]", 1, "Release/b.mkv")),
+         identity=True, series_names={1: "Shared title", 2: "Shared title"}),
+    Case("explicitly disabled identity retains untagged legacy output",
+         {"Release/a.mkv": [(1, [101])]},
+         (result("Series A", 1, "Release/a.mkv"),), identity=False),
+    Case("identity survives partial callbacks for duplicate titles",
+         {"Release/a.mkv": [(1, [101])], "Release/b.mkv": [(2, [201])]},
+         (result("Shared title [ShokoRelay SeriesID:1]", 1, "Release/a.mkv"),
+          result("Shared title [ShokoRelay SeriesID:2]", 1, "Release/b.mkv")),
+         identity=True, series_names={1: "Shared title", 2: "Shared title"}, partial=True),
+    Case("identity preserves Unicode names and combined episode offsets",
+         {"Release/a.mkv": [(1, [101, 102])]},
+         (result("星空・カフェ [ShokoRelay SeriesID:1]", 1, "Release/a.mkv", offset=0),
+          result("星空・カフェ [ShokoRelay SeriesID:1]", 2, "Release/a.mkv", offset=50)),
+         identity=True, series_names={1: "星空・カフェ"}),
+    Case("identity preserves signed credit-season coordinates",
+         {"Release/a.mkv": [(1, [101])]},
+         (result("Series A [ShokoRelay SeriesID:1]", 1, "Release/a.mkv", season=-1),),
+         identity=True, episode_types={101: "Credits"}),
+    Case("identity accepts the maximum signed database ID",
+         {"Release/a.mkv": [(2147483647, [101])]},
+         (result("Boundary [ShokoRelay SeriesID:2147483647]", 1, "Release/a.mkv"),),
+         identity=True, series_names={2147483647: "Boundary"}),
+    Case("identity rejects zero IDs instead of emitting untagged files",
+         {"Release/a.mkv": [(0, [101])]}, (), identity=True, errors=("Error in Scan:",)),
+    Case("identity rejects oversized IDs",
+         {"Release/a.mkv": [(2147483648, [101])]}, (), identity=True,
+         series_names={2147483648: "Boundary"}, errors=("Error in Scan:",)),
+    Case("identity rejects reserved markers in actual titles",
+         {"Release/a.mkv": [(1, [101])]}, (), identity=True,
+         series_names={1: "Title [ShokoRelay SeriesID:2]"}, errors=("Error in Scan:",)),
+    Case("identity rejects newlines in actual titles",
+         {"Release/a.mkv": [(1, [101])]}, (), identity=True,
+         series_names={1: "Title\nSubtitle"}, errors=("Error in Scan:",)),
+    Case("identity rejects empty titles",
+         {"Release/a.mkv": [(1, [101])]}, (), identity=True,
+         series_names={1: ""}, errors=("Error in Scan:",)),
+    Case("identity mode retains primary-series crossover selection",
+         {"Release/crossover.mkv": [(1, [101]), (2, [201])]},
+         (result("Series A [ShokoRelay SeriesID:1]", 1, "Release/crossover.mkv"),), identity=True),
+    Case("trailing root separator still removes flat native callback",
+         {"Release/a.mkv": [(1, [101])]}, (result("Series A", 1, "Release/a.mkv"),), trailing_root=True),
+    Case("trailing root separator still removes nested top-level callback",
+         {"Outer/Release/a.mkv": [(1, [101])]}, (result("Series A", 1, "Outer/Release/a.mkv"),), trailing_root=True),
+    Case("trailing queued directory separator still removes callback",
+         {"Release/a.mkv": [(1, [101])]}, (result("Series A", 1, "Release/a.mkv"),), trailing_queue=True),
+    Case("identity and noncanonical roots keep duplicate titles separated",
+         {"Outer/First/a.mkv": [(1, [101])], "Outer/Second/b.mkv": [(2, [201])]},
+         (result("Shared [ShokoRelay SeriesID:1]", 1, "Outer/First/a.mkv"),
+          result("Shared [ShokoRelay SeriesID:2]", 1, "Outer/Second/b.mkv")),
+         identity=True, series_names={1: "Shared", 2: "Shared"}, trailing_root=True, trailing_queue=True),
 ]
 
 
