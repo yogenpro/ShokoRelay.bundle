@@ -34,12 +34,18 @@ class FakeGitHub:
         self.existing_branch = False
         self.merge_conflict = False
         self.graphql_error = False
+        self.graphql_unknown = False
 
     def request(self, path, method='GET', data=None):
         self.calls.append((path, method, copy.deepcopy(data)))
         if method == 'POST':
             if path == '/graphql':
-                return {'errors': [{'message': 'test error'}]} if self.graphql_error else {'data': {}}
+                if self.graphql_error:
+                    return {'errors': [{'message': 'test error'}]}
+                if self.graphql_unknown:
+                    return {'data': {}}
+                operation = ('enable' if 'enablePullRequestAutoMerge' in data['query'] else 'disable') + 'PullRequestAutoMerge'
+                return {'data': {operation: {'clientMutationId': None}}}
             if path.endswith('/merges') and self.merge_conflict:
                 raise sync.APIError(409, 'Merge conflict')
             if path.endswith('/pulls'):
@@ -225,6 +231,13 @@ class FinishTests(unittest.TestCase):
         api = FakeGitHub()
         api.graphql_error = True
         with self.assertRaisesRegex(RuntimeError, 'Could not enable'):
+            sync.finish(api, 7, H, B, 'success')
+        self.assertFalse(api.statuses())
+
+    def test_unknown_graphql_result_never_publishes_success(self):
+        api = FakeGitHub()
+        api.graphql_unknown = True
+        with self.assertRaisesRegex(RuntimeError, 'missing successful'):
             sync.finish(api, 7, H, B, 'success')
         self.assertFalse(api.statuses())
 

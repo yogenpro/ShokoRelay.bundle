@@ -116,7 +116,7 @@ def comment(api, pr, reason):
         return
     body = ('%s\nUpstream update needs attention: **%s**.\n\n'
             'The maintained branch has not been updated. See the linked Actions run '
-            'for details and [UPSTREAM.md](../blob/master/UPSTREAM.md) for the Codex '
+            'for details and [UPSTREAM.md](https://github.com/yogenpro/ShokoRelay.bundle/blob/master/UPSTREAM.md) for the Codex '
             'repair prompt. Push a repair to this same PR branch; validation and '
             'automatic merging will resume. The scheduler preserves your repair '
             'commits and does not replace this branch with a newer upstream tip.\n\n'
@@ -125,14 +125,23 @@ def comment(api, pr, reason):
     api.request(endpoint('/issues/%s/comments' % pr['number']), 'POST', {'body': body})
 
 
+def auto_merge(api, pr, enabled):
+    operation = ('enable' if enabled else 'disable') + 'PullRequestAutoMerge'
+    method = ',mergeMethod:MERGE' if enabled else ''
+    response = api.request('/graphql', 'POST', {
+        'query': 'mutation($id:ID!){%s(input:{pullRequestId:$id%s}){clientMutationId}}' % (operation, method),
+        'variables': {'id': pr['node_id']},
+    })
+    if (not isinstance(response, dict) or response.get('errors') or
+            not isinstance(response.get('data'), dict) or
+            not isinstance(response['data'].get(operation), dict)):
+        raise RuntimeError('Could not %s auto-merge; missing successful GitHub response' %
+                           ('enable' if enabled else 'disable'))
+
+
 def disable_auto(api, pr):
     if pr.get('auto_merge'):
-        response = api.request('/graphql', 'POST', {
-            'query': 'mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}',
-            'variables': {'id': pr['node_id']},
-        })
-        if response.get('errors'):
-            raise RuntimeError('Could not disable auto-merge: ' + json.dumps(response['errors']))
+        auto_merge(api, pr, False)
 
 
 def prepare(api, event_pr=None):
@@ -237,12 +246,7 @@ def finish(api, number, head, base, result, reason=''):
         automatic = not any(controlled(item['filename']) or
                             controlled(item.get('previous_filename', '')) for item in files)
     if automatic:
-        response = api.request('/graphql', 'POST', {
-            'query': 'mutation($id:ID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:MERGE}){clientMutationId}}',
-            'variables': {'id': pr['node_id']},
-        })
-        if response.get('errors'):
-            raise RuntimeError('Could not enable auto-merge: ' + json.dumps(response['errors']))
+        auto_merge(api, pr, True)
     else:
         disable_auto(api, pr)
     # Native strict branch protection keeps the base-current check effective
