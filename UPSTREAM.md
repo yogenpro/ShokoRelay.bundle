@@ -4,6 +4,10 @@
 `natyusha/ShokoRelay.bundle`'s `master` daily at 10:37 UTC and can also be run
 from **Actions → Upstream synchronization → Run workflow**.
 
+Use this workflow to update the patched branch. A forced fork synchronization
+can replace fork-specific commits; the updater preserves them through ordinary
+merge commits and never force-pushes.
+
 The updater opens one PR in this fork, using `upstream-sync/<full upstream
 SHA>`. It merges the maintained branch into that candidate when possible,
 preserving upstream history. It never force-pushes or replaces an open PR
